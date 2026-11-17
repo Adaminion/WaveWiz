@@ -253,7 +253,7 @@ class _ClipPageState extends State<ClipPage> with SingleTickerProviderStateMixin
               message: merged.isEmpty
                   ? 'Mark ranges with I and O first'
                   : _index.complete
-                      ? 'Copy marked ranges to a folder'
+                      ? 'Export marked ranges to a folder'
                       : 'Wait for indexing to finish',
               child: FilledButton.icon(
                 onPressed: exportable ? _export : null,

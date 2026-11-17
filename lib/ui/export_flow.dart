@@ -20,7 +20,7 @@ Future<void> runExportFlow(BuildContext context, List<ClipInfo> clips) async {
   ];
   if (marked.isEmpty) return;
 
-  final uri = await FilePicker.pickDirectory(dialogTitle: 'Choose where to copy the ranges');
+  final uri = await FilePicker.pickDirectory(dialogTitle: 'Choose where to export the ranges');
   if (uri == null || !context.mounted) return;
   final dest = uri.toFilePath();
 
@@ -178,7 +178,7 @@ class _ConfirmDialogState extends State<_ConfirmDialog> {
         index: 0,
         count: first.ranges.length);
     return AlertDialog(
-      title: Text('Copy $folders clip folder${folders == 1 ? '' : 's'}?'),
+      title: Text('Export $folders clip folder${folders == 1 ? '' : 's'}?'),
       content: SizedBox(
         width: 520,
         child: Column(
@@ -207,7 +207,7 @@ class _ConfirmDialogState extends State<_ConfirmDialog> {
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
         FilledButton(
           onPressed: () => Navigator.pop(context, (prefix: _prefix.text, when: _when)),
-          child: const Text('Copy'),
+          child: const Text('Export'),
         ),
       ],
     );
