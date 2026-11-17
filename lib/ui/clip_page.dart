@@ -2,16 +2,15 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import '../wave/kwi.dart';
 import '../wave/kwv_index.dart';
 import '../wave/ll2.dart';
-import '../wave/offload.dart';
 import '../wave/ranges.dart';
-import 'export_dialog.dart';
+import 'export_flow.dart';
 import 'frame_image.dart';
 import 'timeline.dart';
 
@@ -24,10 +23,18 @@ class ClipPage extends StatefulWidget {
   State<ClipPage> createState() => _ClipPageState();
 }
 
-class _ClipPageState extends State<ClipPage> {
-  late final ClipIndex _index = ClipIndex(widget.clip.chunkPaths);
-  late final ClipMarks _marks = ClipMarks.forClip(widget.clip.dir);
-  void Function()? _cancelScan;
+class _ClipPageState extends State<ClipPage> with SingleTickerProviderStateMixin {
+  late final ClipIndex _index = ClipIndex.forClip(widget.clip);
+  late final ClipMarks _marks = ClipMarks.forClip(widget.clip.id, widget.clip.name);
+
+  // Playback (J/K/L/Space). Rates are frames shown per second; the playhead
+  // follows the clock and skips frames the decoder can't keep up with.
+  static const List<double> _ladder = [30, 120, 480, 1920];
+  Ticker? _ticker;
+  Duration _lastTick = Duration.zero;
+  int _dir = 0; // -1 reverse, 0 stopped, 1 forward
+  int _level = 0;
+  double _pos = 0;
   ui.Image? _image;
   int _frame = 0;
   int? _pending; // latest requested frame while a decode is in flight
@@ -39,27 +46,38 @@ class _ClipPageState extends State<ClipPage> {
   @override
   void initState() {
     super.initState();
-    _cancelScan = _index.start(_onIndexed, (e) {
-      if (mounted) setState(() => _error = '$e');
+    _index.addListener(_onIndexed);
+    _marks.addListener(_onMarks);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _image == null && _index.frameCount > 0) _show(0);
     });
+  }
+
+  void _onMarks() {
+    if (mounted) setState(() {});
   }
 
   void _onIndexed() {
     if (!mounted) return;
-    setState(() {});
+    setState(() {
+      if (_index.error != null) _error = '${_index.error}';
+    });
     if (_image == null && _index.frameCount > 0) _show(_frame);
   }
 
   @override
   void dispose() {
-    _cancelScan?.call();
+    _ticker?.dispose();
+    _index.removeListener(_onIndexed);
+    _marks.removeListener(_onMarks);
     _image?.dispose();
     _focus.dispose();
     super.dispose();
   }
 
-  void _show(int g) {
+  void _show(int g, {bool fromTick = false}) {
     g = g.clamp(0, math.max(_index.frameCount - 1, 0));
+    if (!fromTick) _pos = g.toDouble();
     setState(() => _frame = g);
     if (_busy) {
       _pending = g;
@@ -99,20 +117,70 @@ class _ClipPageState extends State<ClipPage> {
 
   // --- marking -------------------------------------------------------------
 
-  void _markIn() => setState(() => _marks.pendingIn = _frame);
+  void _markIn() {
+    _marks.setPendingIn(_frame);
+    _focus.requestFocus();
+  }
 
   void _markOut() {
+    _focus.requestFocus();
     final i = _marks.pendingIn;
     if (i == null) {
       _toast('Press I first to set an In point.');
     } else if (_frame < i) {
       _toast('Out point is before the In point.');
     } else {
+      _marks.addRange(FrameRange(i, _frame));
+    }
+  }
+
+  // --- playback ------------------------------------------------------------
+
+  void _tick(Duration elapsed) {
+    var dt = (elapsed - _lastTick).inMicroseconds / 1e6;
+    _lastTick = elapsed;
+    if (dt > 0.1) dt = 0.1; // don't jump after a stall
+    final last = math.max(_index.frameCount - 1, 0);
+    _pos += _dir * _ladder[_level] * dt;
+    if (_pos >= last || _pos <= 0) {
+      _pos = _pos.clamp(0, last).toDouble();
+      _stop();
+    }
+    final f = _pos.floor();
+    if (f != _frame) _show(f, fromTick: true);
+  }
+
+  void _play(int dir) {
+    if (_index.frameCount == 0) return;
+    if (_dir == dir) {
+      _level = (_level + 1) % _ladder.length; // 1x → 2x → 3x → 4x → back to 1x
+    } else {
+      _dir = dir;
+      _level = 0;
+      _pos = _frame.toDouble();
+    }
+    _ticker ??= createTicker(_tick);
+    if (!_ticker!.isActive) {
+      _lastTick = Duration.zero;
+      _ticker!.start();
+    }
+    setState(() {});
+  }
+
+  void _stop() {
+    _ticker?.stop();
+    if (mounted) {
       setState(() {
-        _marks.ranges.add(FrameRange(i, _frame));
-        _marks.pendingIn = null;
+        _dir = 0;
+        _level = 0;
       });
     }
+  }
+
+  String get _playLabel {
+    if (_dir == 0) return '';
+    final r = _ladder[_level];
+    return '${_dir > 0 ? '▶' : '◀'} ${r.round()} fps  ·  ${(r / widget.clip.fps).toStringAsFixed(2)}× real time';
   }
 
   void _toast(String m) => ScaffoldMessenger.of(context)
@@ -124,9 +192,12 @@ class _ClipPageState extends State<ClipPage> {
     final kb = HardwareKeyboard.instance;
     final step = kb.isShiftPressed ? 10 : (kb.isMetaPressed || kb.isControlPressed) ? 1000 : 1;
     final k = e.logicalKey;
+    final down = e is KeyDownEvent;
     if (k == LogicalKeyboardKey.arrowRight) {
+      _stop();
       _show(_frame + step);
     } else if (k == LogicalKeyboardKey.arrowLeft) {
+      _stop();
       _show(_frame - step);
     } else if (k == LogicalKeyboardKey.pageDown) {
       _show(_frame + 100);
@@ -136,10 +207,18 @@ class _ClipPageState extends State<ClipPage> {
       _show(0);
     } else if (k == LogicalKeyboardKey.end) {
       _show(_index.frameCount - 1);
-    } else if (e is KeyDownEvent && k == LogicalKeyboardKey.keyI) {
+    } else if (down && k == LogicalKeyboardKey.keyI) {
       _markIn();
-    } else if (e is KeyDownEvent && k == LogicalKeyboardKey.keyO) {
+    } else if (down && k == LogicalKeyboardKey.keyO) {
       _markOut();
+    } else if (down && k == LogicalKeyboardKey.space) {
+      _dir == 0 ? _play(1) : _stop();
+    } else if (down && k == LogicalKeyboardKey.keyK) {
+      _stop();
+    } else if (down && k == LogicalKeyboardKey.keyL) {
+      _play(1);
+    } else if (down && k == LogicalKeyboardKey.keyJ) {
+      _play(-1);
     } else {
       return KeyEventResult.ignored;
     }
@@ -149,34 +228,7 @@ class _ClipPageState extends State<ClipPage> {
   // --- export --------------------------------------------------------------
 
   Future<void> _export() async {
-    final merged = mergeRanges(_marks.ranges);
-    if (merged.isEmpty) return;
-    final uri = await FilePicker.pickDirectory(dialogTitle: 'Choose where to copy the ranges');
-    if (uri == null || !mounted) return;
-    final dest = uri.toFilePath();
-    final last = _index.frameCount - 1;
-    final plan = OffloadPlan(
-      clipName: widget.clip.name,
-      kwiPath: widget.clip.kwiPath,
-      chunkLimit: widget.clip.chunkLimit,
-      // +1 frame: the end frame's data can spill into the next frame's slice.
-      ranges: [for (final r in merged) _index.runs(r.start, math.min(r.end + 1, last))],
-    );
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Copy marked ranges?'),
-        content: Text('${merged.length} range${merged.length == 1 ? '' : 's'}, '
-            '${plan.totalFrames} frames, ${fmtBytes(plan.totalBytes)}\n'
-            'Each range becomes its own clip folder in:\n$dest'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Copy')),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    await showExportDialog(context, plan, dest);
+    await runExportFlow(context, [widget.clip]);
     if (mounted) _focus.requestFocus();
   }
 
@@ -259,6 +311,8 @@ class _ClipPageState extends State<ClipPage> {
                           '${_t(_frame)} real time'),
                       OutlinedButton(onPressed: n == 0 ? null : _markIn, child: const Text('I  In')),
                       OutlinedButton(onPressed: n == 0 ? null : _markOut, child: const Text('O  Out')),
+                      if (_dir != 0)
+                        Text(_playLabel, style: const TextStyle(fontWeight: FontWeight.bold)),
                       Text(_index.complete
                           ? '${c.width}×${c.height} @ ${c.fps.round()} fps · LL2 preview'
                           : 'Indexing ${_index.chunksDone}/${c.chunkPaths.length} chunks…'),
@@ -278,11 +332,15 @@ class _ClipPageState extends State<ClipPage> {
                           label: Text('${i + 1}: ${_marks.ranges[i].start + 1} → '
                               '${_marks.ranges[i].end + 1}  '
                               '(${_marks.ranges[i].length} f, ${_t(_marks.ranges[i].length)})'),
-                          onPressed: () => _show(_marks.ranges[i].start),
-                          onDeleted: () => setState(() => _marks.ranges.removeAt(i)),
+                          onPressed: () {
+                            _show(_marks.ranges[i].start);
+                            _focus.requestFocus();
+                          },
+                          onDeleted: () => _marks.removeAt(i),
                         ),
                       if (_marks.ranges.isEmpty && _marks.pendingIn == null)
-                        Text('I = In point, O = Out point; mark as many ranges as you like. '
+                        Text('I = In, O = Out (as many ranges as you like). Space play/stop, '
+                            'L/J play forward/back (press again for faster), K stop. '
                             '←/→ step 1, Shift 10, Page 100, ⌘/Ctrl 1000.',
                             style: Theme.of(context).textTheme.bodySmall),
                     ],

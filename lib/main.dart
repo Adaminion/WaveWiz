@@ -2,6 +2,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'app_store.dart';
 import 'ui/browser_page.dart';
 import 'ui/version_overlay.dart';
 
@@ -30,7 +31,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ''';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await AppStore.init();
   LicenseRegistry.addLicense(() async* {
     yield const LicenseEntryWithLineBreaks(['WAVE-Vivado'], _waveVivadoLicence);
   });

@@ -7,31 +7,50 @@ import 'dart:typed_data';
 
 import 'kwv_index.dart';
 
-class OffloadPlan {
-  OffloadPlan({
-    required this.clipName,
+/// One output clip folder: a run list copied from one source clip.
+class OffloadItem {
+  OffloadItem({
+    required this.name,
     required this.kwiPath,
     required this.chunkLimit,
-    required this.ranges,
+    required this.runs,
   });
 
-  final String clipName;
+  /// Output folder name (also the .kwi file name inside it).
+  final String name;
   final String kwiPath;
 
   /// Output chunk size limit in bytes (frames are never split across chunks).
   final int chunkLimit;
+  final List<RunData> runs;
 
-  /// One entry per output clip: the runs of frames to copy.
-  final List<List<RunData>> ranges;
-
-  int get totalBytes => ranges.fold(
-      0, (a, r) => a + r.fold(0, (b, run) => b + run.lengths.fold(0, (c, l) => c + l)));
-  int get totalFrames =>
-      ranges.fold(0, (a, r) => a + r.fold(0, (b, run) => b + run.lengths.length));
+  int get bytes => runs.fold(0, (a, r) => a + r.lengths.fold(0, (b, l) => b + l));
+  int get frames => runs.fold(0, (a, r) => a + r.lengths.length);
 }
 
-String outputClipName(String clip, int i, int count) =>
-    '${clip}_r${(i + 1).toString().padLeft(count > 99 ? 3 : 2, '0')}';
+class OffloadPlan {
+  OffloadPlan(this.items);
+  final List<OffloadItem> items;
+  int get totalBytes => items.fold(0, (a, i) => a + i.bytes);
+  int get totalFrames => items.fold(0, (a, i) => a + i.frames);
+}
+
+/// Export folder name, e.g. `wavewiz-261117-1245-1548fps-c0053-01`.
+/// Dashes separate the parts; an empty prefix is simply omitted.
+String outputName({
+  required String prefix,
+  required DateTime when,
+  required int fps,
+  required String clip,
+  required int index,
+  required int count,
+}) {
+  String two(int v) => v.toString().padLeft(2, '0');
+  final p = prefix.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '').trim();
+  final stamp = '${two(when.year % 100)}${two(when.month)}${two(when.day)}-${two(when.hour)}${two(when.minute)}';
+  final n = (index + 1).toString().padLeft(count > 99 ? 3 : 2, '0');
+  return [if (p.isNotEmpty) p, stamp, '${fps}fps', clip, n].join('-');
+}
 
 class OffloadJob {
   OffloadJob._();
@@ -97,17 +116,17 @@ void _worker(List<Object> a) {
   try {
     var done = 0;
     var buf = Uint8List(_maxBurst);
-    for (var r = 0; r < plan.ranges.length; r++) {
-      final name = outputClipName(plan.clipName, r, plan.ranges.length);
+    for (final item in plan.items) {
+      final name = item.name;
       final dir = Directory('$dest/$name');
       if (dir.existsSync()) throw FileSystemException('Folder already exists', dir.path);
       dir.createSync(recursive: true);
-      File(plan.kwiPath).copySync('${dir.path}/$name.kwi');
+      File(item.kwiPath).copySync('${dir.path}/$name.kwi');
 
       var chunkNo = 0, written = 0, frames = 0;
       RandomAccessFile? out;
       final chunkFiles = <String>[];
-      for (final run in plan.ranges[r]) {
+      for (final run in item.runs) {
         final src = File(run.path).openSync();
         try {
           final n = run.lengths.length;
@@ -115,7 +134,7 @@ void _worker(List<Object> a) {
           while (i < n) {
             var j = i;
             var burst = run.lengths[i];
-            if (out != null && written > 0 && written + burst > plan.chunkLimit) {
+            if (out != null && written > 0 && written + burst > item.chunkLimit) {
               out.closeSync();
               out = null;
             }
@@ -128,7 +147,7 @@ void _worker(List<Object> a) {
             while (j + 1 < n &&
                 run.offsets[j + 1] == run.offsets[j] + run.lengths[j] &&
                 burst + run.lengths[j + 1] <= _maxBurst &&
-                written + burst + run.lengths[j + 1] <= plan.chunkLimit) {
+                written + burst + run.lengths[j + 1] <= item.chunkLimit) {
               j++;
               burst += run.lengths[j];
             }

@@ -6,6 +6,14 @@ import 'dart:typed_data';
 const String kWaveDelimiter = 'WAVE HELLO!\n';
 const int kHeaderSize = 512;
 
+String _fnv(Uint8List b) {
+  var h = 0xcbf29ce484222325;
+  for (final x in b) {
+    h = (h ^ x) * 0x100000001b3;
+  }
+  return h.toUnsigned(64).toRadixString(16);
+}
+
 bool hasDelimiter(Uint8List b, [int at = 0]) {
   if (b.length < at + 12) return false;
   for (var i = 0; i < 12; i++) {
@@ -27,6 +35,7 @@ class ClipInfo {
     required this.totalBytes,
     required this.chunkLimit,
     required this.kwiPath,
+    required this.id,
   });
 
   final String name;
@@ -42,6 +51,10 @@ class ClipInfo {
   /// Largest source chunk size; output chunks are capped at the same size.
   final int chunkLimit;
   final String kwiPath;
+
+  /// Stable identity across mounts: name, size and a hash of the clip header.
+  /// (Clip names like c0040 repeat on different cards.)
+  final String id;
 
   /// Parses a ClipHeader_s (first 512 bytes of a .kwi). Returns null if invalid.
   static ({int w, int h, double fps, double shutter, double temp})? parseHeader(
@@ -104,6 +117,7 @@ class ClipInfo {
         totalBytes: total,
         chunkLimit: biggest,
         kwiPath: kwi.path,
+        id: '${segs.isEmpty ? dir.path : segs.last}|$total|${chunks.length}|${_fnv(head)}',
       );
     } on FileSystemException {
       return null;

@@ -5,6 +5,8 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
+
 import 'kwi.dart';
 
 /// Per-frame data for one chunk, stored as typed arrays (compact for 100k+ frames).
@@ -81,13 +83,25 @@ class FrameRef {
 }
 
 /// Whole-clip frame index, filled in chunk by chunk by a background isolate.
-class ClipIndex {
+/// Notifies listeners as chunks arrive.
+class ClipIndex extends ChangeNotifier {
   ClipIndex(this.chunkPaths) : chunks = List.filled(chunkPaths.length, null);
 
   final List<String> chunkPaths;
   final List<ChunkIndex?> chunks;
   int _indexedCount = 0; // leading contiguous chunks that are indexed
   int _frames = 0; // frames in leading contiguous chunks
+  bool _started = false;
+  Object? error;
+
+  /// One index per clip, shared by the clip page and export-all, and kept
+  /// running in the background once started.
+  static final Map<String, ClipIndex> _registry = {};
+  static ClipIndex forClip(ClipInfo clip) {
+    final i = _registry.putIfAbsent(clip.id, () => ClipIndex(clip.chunkPaths));
+    i.ensureStarted();
+    return i;
+  }
 
   /// Number of frames in the contiguous indexed prefix (scrubbable range).
   int get frameCount => _frames;
@@ -104,6 +118,32 @@ class ClipIndex {
   void put(int chunk, ChunkIndex idx) {
     chunks[chunk] = idx;
     _advance();
+  }
+
+  /// Starts the background scan once.
+  void ensureStarted() {
+    if (_started || complete) return;
+    _started = true;
+    final rp = ReceivePort();
+    Isolate.spawn(_scanWorker, [rp.sendPort, chunkPaths]).then((_) {}, onError: (Object e) {
+      error = e;
+      notifyListeners();
+    });
+    rp.listen((m) {
+      if (m == null) {
+        rp.close();
+      } else if (m is String) {
+        error = m;
+        rp.close();
+        notifyListeners();
+      } else {
+        final l = m as List;
+        put(l[0] as int,
+            ChunkIndex(l[1] as Int64List, l[2] as Uint32List, l[3] as Uint32List,
+                l[4] as Uint16List, l[5] as Uint8List, l[6] as Uint32List));
+        notifyListeners();
+      }
+    });
   }
 
   /// Frame [g] (global index within the indexed prefix).
@@ -162,39 +202,6 @@ class ClipIndex {
       rest -= ci.length;
     }
     return null;
-  }
-
-  /// Indexes all chunks in a background isolate. Calls [onProgress] after each
-  /// chunk. Returns a function that cancels the scan.
-  void Function() start(void Function() onProgress, void Function(Object) onError) {
-    final rp = ReceivePort();
-    Isolate? iso;
-    var dead = false;
-    Isolate.spawn(_scanWorker, [rp.sendPort, chunkPaths]).then((i) {
-      if (dead) {
-        i.kill(priority: Isolate.immediate);
-      } else {
-        iso = i;
-      }
-    }, onError: (Object e) => onError(e));
-    rp.listen((m) {
-      if (m == null) {
-        rp.close();
-      } else if (m is String) {
-        onError(m);
-      } else {
-        final l = m as List;
-        put(l[0] as int,
-            ChunkIndex(l[1] as Int64List, l[2] as Uint32List, l[3] as Uint32List,
-                l[4] as Uint16List, l[5] as Uint8List, l[6] as Uint32List));
-        onProgress();
-      }
-    });
-    return () {
-      dead = true;
-      iso?.kill(priority: Isolate.immediate);
-      rp.close();
-    };
   }
 }
 
