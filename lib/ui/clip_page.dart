@@ -249,20 +249,19 @@ class _ClipPageState extends State<ClipPage> {
                     onSeek: _show,
                   ),
                   const SizedBox(height: 4),
-                  Row(
+                  Wrap(
+                    spacing: 16,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       Text('Frame ${n == 0 ? 0 : _frame + 1} / $n'
                           '${camN != null ? '  (camera #$camN)' : ''}  ·  '
                           '${_t(_frame)} real time'),
-                      const SizedBox(width: 16),
                       OutlinedButton(onPressed: n == 0 ? null : _markIn, child: const Text('I  In')),
-                      const SizedBox(width: 8),
                       OutlinedButton(onPressed: n == 0 ? null : _markOut, child: const Text('O  Out')),
-                      const Spacer(),
                       Text(_index.complete
                           ? '${c.width}×${c.height} @ ${c.fps.round()} fps · LL2 preview'
                           : 'Indexing ${_index.chunksDone}/${c.chunkPaths.length} chunks…'),
-                      const SizedBox(width: 48), // keep clear of the version overlay
                     ],
                   ),
                   if (_error != null && _image != null)
