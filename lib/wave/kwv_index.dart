@@ -9,13 +9,15 @@ import 'kwi.dart';
 
 /// Per-frame data for one chunk, stored as typed arrays (compact for 100k+ frames).
 class ChunkIndex {
-  ChunkIndex(this.offsets, this.size0, this.nFrame, this.fifo0, this.flag0);
+  ChunkIndex(this.offsets, this.size0, this.nFrame, this.fifo0, this.flag0,
+      this.frameBytes);
 
   final Int64List offsets; // byte offset of the frame header within the chunk
   final Uint32List size0; // codestream 0 (LL2) size in bytes
   final Uint32List nFrame; // camera frame number
   final Uint16List fifo0; // csFIFOState[0]
   final Uint8List flag0; // csFIFOFlags bit 16 (extra 64-bit discard for cs0)
+  final Uint32List frameBytes; // 512 B header + all codestreams
 
   int get length => offsets.length;
 }
@@ -30,6 +32,7 @@ ChunkIndex scanChunk(String path, {int? maxFrames}) {
     final nf = <int>[];
     final f0 = <int>[];
     final fl = <int>[];
+    final fb = <int>[];
     final buf = Uint8List(kHeaderSize);
     var p = 0;
     while (p + kHeaderSize <= len && (maxFrames == null || offs.length < maxFrames)) {
@@ -46,13 +49,22 @@ ChunkIndex scanChunk(String path, {int? maxFrames}) {
       nf.add(d.getUint32(0x0C, Endian.little));
       f0.add(d.getUint16(0xC0, Endian.little));
       fl.add((d.getUint32(0x24, Endian.little) >> 16) & 1);
+      fb.add(kHeaderSize + payload);
       p += kHeaderSize + payload;
     }
     return ChunkIndex(Int64List.fromList(offs), Uint32List.fromList(s0),
-        Uint32List.fromList(nf), Uint16List.fromList(f0), Uint8List.fromList(fl));
+        Uint32List.fromList(nf), Uint16List.fromList(f0), Uint8List.fromList(fl), Uint32List.fromList(fb));
   } finally {
     raf.closeSync();
   }
+}
+
+/// Frames of one source chunk to copy: byte offsets and lengths per frame.
+class RunData {
+  RunData(this.path, this.offsets, this.lengths);
+  final String path;
+  final Int64List offsets;
+  final Uint32List lengths;
 }
 
 /// A frame's location, enough to decode LL2 without further indexing.
@@ -109,6 +121,38 @@ class ClipIndex {
     return null;
   }
 
+  /// Contiguous per-chunk frame runs covering global frames [start]..[end]
+  /// (inclusive, clamped to the indexed range), for copying.
+  List<RunData> runs(int start, int end) {
+    final out = <RunData>[];
+    var base = 0;
+    for (var c = 0; c < _indexedCount && base <= end; c++) {
+      final ci = chunks[c]!;
+      final lo = start - base < 0 ? 0 : start - base;
+      final hi = end - base > ci.length - 1 ? ci.length - 1 : end - base;
+      if (lo <= hi) {
+        out.add(RunData(chunkPaths[c], ci.offsets.sublist(lo, hi + 1),
+            ci.frameBytes.sublist(lo, hi + 1)));
+      }
+      base += ci.length;
+    }
+    return out;
+  }
+
+  /// Source file, byte offset and byte length of global frame [g], or null.
+  ({String path, int offset, int length})? span(int g) {
+    if (g < 0) return null;
+    var rest = g;
+    for (var c = 0; c < _indexedCount; c++) {
+      final ci = chunks[c]!;
+      if (rest < ci.length) {
+        return (path: chunkPaths[c], offset: ci.offsets[rest], length: ci.frameBytes[rest]);
+      }
+      rest -= ci.length;
+    }
+    return null;
+  }
+
   /// Camera frame number of global frame [g].
   int? cameraFrameNumber(int g) {
     var rest = g;
@@ -142,7 +186,7 @@ class ClipIndex {
         final l = m as List;
         put(l[0] as int,
             ChunkIndex(l[1] as Int64List, l[2] as Uint32List, l[3] as Uint32List,
-                l[4] as Uint16List, l[5] as Uint8List));
+                l[4] as Uint16List, l[5] as Uint8List, l[6] as Uint32List));
         onProgress();
       }
     });
@@ -160,7 +204,7 @@ void _scanWorker(List<Object> args) {
   try {
     for (var i = 0; i < paths.length; i++) {
       final c = scanChunk(paths[i]);
-      port.send([i, c.offsets, c.size0, c.nFrame, c.fifo0, c.flag0]);
+      port.send([i, c.offsets, c.size0, c.nFrame, c.fifo0, c.flag0, c.frameBytes]);
     }
     port.send(null);
   } catch (e) {

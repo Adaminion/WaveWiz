@@ -25,6 +25,8 @@ class ClipInfo {
     required this.colorTemp,
     required this.chunkPaths,
     required this.totalBytes,
+    required this.chunkLimit,
+    required this.kwiPath,
   });
 
   final String name;
@@ -36,6 +38,10 @@ class ClipInfo {
   final double colorTemp;
   final List<String> chunkPaths;
   final int totalBytes;
+
+  /// Largest source chunk size; output chunks are capped at the same size.
+  final int chunkLimit;
+  final String kwiPath;
 
   /// Parses a ClipHeader_s (first 512 bytes of a .kwi). Returns null if invalid.
   static ({int w, int h, double fps, double shutter, double temp})? parseHeader(
@@ -60,7 +66,7 @@ class ClipInfo {
     try {
       File? kwi;
       final chunks = <String>[];
-      var total = 0;
+      var total = 0, biggest = 0;
       for (final e in dir.listSync(followLinks: false)) {
         if (e is! File) continue;
         final base = e.uri.pathSegments.last;
@@ -69,7 +75,9 @@ class ClipInfo {
           kwi ??= e;
         } else if (base.endsWith('.kwv')) {
           chunks.add(e.path);
-          total += e.lengthSync();
+          final l = e.lengthSync();
+          total += l;
+          if (l > biggest) biggest = l;
         }
       }
       if (kwi == null || chunks.isEmpty) return null;
@@ -94,6 +102,8 @@ class ClipInfo {
         colorTemp: h.temp,
         chunkPaths: chunks,
         totalBytes: total,
+        chunkLimit: biggest,
+        kwiPath: kwi.path,
       );
     } on FileSystemException {
       return null;
