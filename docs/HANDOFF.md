@@ -60,9 +60,11 @@ Codestream map (from hdmi.c): cs0 = LL2, cs1 = LH2, cs2 = HL2, cs3 = HH2. cs4..c
   - Pixel order in a row (2K): xs = (x + wLL2 - 1) % wLL2; offset = xs[1:0] | xs[7:6]<<2 | colour<<4 | xs[5:2]<<6. For 4K, xs[8:7] and xs[6:2] (see bitOffsetInLL2 in hdmi_dark_frame.c).
   - The 4 colour fields are the Bayer channels (R, G1, G2, B per firmware naming; the TODO in the source says the order may not match the Bayer grid).
   - Verified on c0042: a correct image. The bottom row may be slightly off.
-- **Half-res (LL1)**: port `decompressor.v` + `decoder_4x16.v` + `dequantizer_4x16.v` + `idwt26_*2.v` for cs1–cs3. Dequant multiplier = 65536 / q_mult; out = (q*mult + roundToZero) >> 8.
-  - VLC (decoder_4x16): groups of 4 signed values; LSB-first prefix gives bits per value: `0` → 0 bits (all zero, 1 bit total); `01` → 2; `011` → 3; `0111` → 4; `01111` → 5; `011111` → 6; `00111111` → 8; `01111111` → 10; `11111111` → 14. Total code lengths: 1, 10, 15, 20, 25, 30, 40, 48, 64 bits. Values are two's complement, LSB-first after the prefix. The bitstream is read as little-endian 64-bit words.
-  - Coefficient ordering inside each subband stream still has to be read from the HDMI_v1_0.v / idwt wiring.
+- **Half-res (LL1): working** (`lib/wave/ll1.dart`, verified on real 2K and 4K clips). LL1 is w/4 x h/4 per colour field (512x256 for 2048x1024, 1024x768 for 4096x3072).
+  - cs1 = LH2, cs2 = HL2, cs3 = HH2: groups of 4 values with the VLC from `decoder_4x16.v` (prefix = trailing ones of the low byte: 0 ones -> all zero, 1 -> 2 bits, 2 -> 3, 3 -> 4, 4 -> 5, 5 -> 6, 6 -> 8, 7 -> 10, 8 -> 14; values two's complement, LSB-first after the prefix). Dequantise: out = (q * (65536 / q_mult) + (q < 0 ? 255 : 0)) >> 8, q_mult from frame header 0x34 (low 16 bits HL2/LH2, high 16 bits HH2).
+  - Same row layout and start margin as LL2 (3328 values in 2K, 6336 in 4K; decode through them, do not skip). A margin 8 values off visibly breaks the picture, so the margin is exact for all four streams.
+  - Reconstruction: vertical inverse on columns (LL2 + LH2 and HL2 + HH2), then horizontal inverse (L + H). Lifting: D' = D - ((S[n-1] - S[n+1] + 2) >> 2); Xeven = S - (D' >> 1); Xodd = Xeven + D'. Frame edges are clamped. Colour fields: R, G1, G2, B; neutral preview = R, (G1+G2)/2, B with gamma 2.2.
+  - `lib/wave/video_export.dart` pipes LL1 frames into ffmpeg (H.264 mp4, one video per marked range).
 - **Full-res**: needs the stage-1 streams; the decode has to be derived from the Encoder_1.0 + Wavelet_S1 Verilog. The vertical wavelet borrows rows from the previous frame (boundary rollover).
 - Colour: apply the clip's colour matrix and the dark frame later. The owner grades elsewhere, so a neutral output is fine.
 

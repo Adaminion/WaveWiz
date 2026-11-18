@@ -29,12 +29,13 @@ int ll2PixelOffset(int x, int c, int wLL2) {
   return (xs & 3) | (((xs >> 6) & 3) << 2) | (c << 4) | (((xs >> 2) & 0xF) << 6);
 }
 
-int _pxDiscard(int wLL2) => wLL2 == 512 ? 6336 : 3328;
+/// Pixels of margin before the first LL2 row in a frame's stream.
+int ll2PxDiscard(int wLL2) => wLL2 == 512 ? 6336 : 3328;
 
 /// Bytes of codestream 0 needed (from the frame's slice start) to decode LL2.
 int ll2BytesNeeded(int w, int h, int fifo0, int flag0) {
   final wl = w >> 3, hl = h >> 3;
-  final bits = fifo0 + flag0 * 64 + 10 * _pxDiscard(wl) + 10 * 4 * wl * hl;
+  final bits = fifo0 + flag0 * 64 + 10 * ll2PxDiscard(wl) + 10 * 4 * wl * hl;
   return (bits + 7) ~/ 8 + 4;
 }
 
@@ -45,7 +46,7 @@ Ll2Image decodeLl2(Uint8List buf, int w, int h, int fifo0, int flag0,
     {int? lo, int? hi}) {
   final wl = w >> 3, hl = h >> 3;
   final n = wl * hl;
-  final start = fifo0 + flag0 * 64 + 10 * _pxDiscard(wl);
+  final start = fifo0 + flag0 * 64 + 10 * ll2PxDiscard(wl);
   final bitsPerRow = 10 * 4 * wl;
   final padded = Uint8List(buf.length + 4)..setRange(0, buf.length, buf);
   // Doubled domain: r*2, g1+g2, b*2 -> 0..2046.
@@ -59,7 +60,6 @@ Ll2Image decodeLl2(Uint8List buf, int w, int h, int fifo0, int flag0,
     return (v >> (bit & 7)) & 0x3FF;
   }
 
-  final hist = Uint32List(2047);
   for (var y = 0; y < hl; y++) {
     final rowBit = start + y * bitsPerRow;
     for (var x = 0; x < wl; x++) {
@@ -70,13 +70,21 @@ Ll2Image decodeLl2(Uint8List buf, int w, int h, int fifo0, int flag0,
       px[o] = r;
       px[o + 1] = g;
       px[o + 2] = b;
-      hist[r]++;
-      hist[g]++;
-      hist[b]++;
     }
   }
+  return rgbaFromDoubled(px, wl, hl, lo: lo, hi: hi);
+}
+
+/// Neutral preview colour from [px] (r*2, g1+g2, b*2 per pixel, 0..2046):
+/// levels from the histogram unless [lo]/[hi] are given, then gamma 2.2.
+Ll2Image rgbaFromDoubled(Uint16List px, int wl, int hl, {int? lo, int? hi}) {
+  final n = wl * hl;
   var l = lo, hh = hi;
   if (l == null || hh == null) {
+    final hist = Uint32List(2047);
+    for (var i = 0; i < n * 3; i++) {
+      hist[px[i]]++;
+    }
     var mn = 0;
     while (mn < 2046 && hist[mn] == 0) {
       mn++;
