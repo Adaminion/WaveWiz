@@ -1,4 +1,4 @@
-// 2026-11-17
+// 2026-11-18
 // LL2 (1/8-scale) preview decoding. LL2 is raw packed 10-bit data, LSB-first,
 // 4 colour fields per pixel. See docs/HANDOFF.md and the pixel mapping in
 // WAVE-Vivado hdmi_dark_frame.c (bitOffsetInLL2).
@@ -10,12 +10,15 @@ import 'dart:typed_data';
 import 'kwv_index.dart';
 
 class Ll2Image {
-  Ll2Image(this.rgba, this.width, this.height, this.lo, this.hi);
+  Ll2Image(this.rgba, this.width, this.height, this.lo, this.hi,
+      [this.gr = 1.0, this.gb = 1.0]);
   final Uint8List rgba;
   final int width;
   final int height;
   final int lo; // black level used, in doubled 10-bit units (0..2046)
   final int hi; // white level used, same units
+  final double gr; // white-balance gain applied to red (green = 1)
+  final double gb; // white-balance gain applied to blue
 }
 
 /// Pixel offset (in 10-bit units) within an LL2 row for pixel [x], colour [c].
@@ -43,7 +46,7 @@ int ll2BytesNeeded(int w, int h, int fifo0, int flag0) {
 /// If [lo]/[hi] are null they are derived from the image (0.5% / 99.5%).
 /// Colour is a neutral preview: R, (G1+G2)/2, B, gamma 2.2.
 Ll2Image decodeLl2(Uint8List buf, int w, int h, int fifo0, int flag0,
-    {int? lo, int? hi}) {
+    {int? lo, int? hi, double? gr, double? gb}) {
   final wl = w >> 3, hl = h >> 3;
   final n = wl * hl;
   final start = fifo0 + flag0 * 64 + 10 * ll2PxDiscard(wl);
@@ -72,13 +75,32 @@ Ll2Image decodeLl2(Uint8List buf, int w, int h, int fifo0, int flag0,
       px[o + 2] = b;
     }
   }
-  return rgbaFromDoubled(px, wl, hl, lo: lo, hi: hi);
+  return rgbaFromDoubled(px, wl, hl, lo: lo, hi: hi, gr: gr, gb: gb);
 }
 
-/// Neutral preview colour from [px] (r*2, g1+g2, b*2 per pixel, 0..2046):
-/// levels from the histogram unless [lo]/[hi] are given, then gamma 2.2.
-Ll2Image rgbaFromDoubled(Uint16List px, int wl, int hl, {int? lo, int? hi}) {
+/// Preview colour from [px] (r*2, g1+g2, b*2 per pixel, 0..2046): automatic
+/// grey-world white balance (red/blue gains so their means match green)
+/// unless [gr]/[gb] are given, levels from the histogram unless [lo]/[hi] are
+/// given, then gamma 2.2.
+Ll2Image rgbaFromDoubled(Uint16List px, int wl, int hl,
+    {int? lo, int? hi, double? gr, double? gb}) {
   final n = wl * hl;
+  if (gr == null || gb == null) {
+    var sr = 0, sg = 0, sb = 0;
+    for (var i = 0; i < n; i++) {
+      sr += px[i * 3];
+      sg += px[i * 3 + 1];
+      sb += px[i * 3 + 2];
+    }
+    gr = sr == 0 ? 1.0 : (sg / sr).clamp(0.25, 4.0);
+    gb = sb == 0 ? 1.0 : (sg / sb).clamp(0.25, 4.0);
+  }
+  if (gr != 1.0 || gb != 1.0) {
+    for (var i = 0; i < n; i++) {
+      px[i * 3] = math.min(2046, (px[i * 3] * gr).round());
+      px[i * 3 + 2] = math.min(2046, (px[i * 3 + 2] * gb).round());
+    }
+  }
   var l = lo, hh = hi;
   if (l == null || hh == null) {
     final hist = Uint32List(2047);
@@ -111,7 +133,7 @@ Ll2Image rgbaFromDoubled(Uint16List px, int wl, int hl, {int? lo, int? hi}) {
     rgba[i * 4 + 2] = lut[px[i * 3 + 2]];
     rgba[i * 4 + 3] = 255;
   }
-  return Ll2Image(rgba, wl, hl, l, hh);
+  return Ll2Image(rgba, wl, hl, l, hh, gr, gb);
 }
 
 /// Reads the stream bytes for frame [cur] (continuing into [next] if the frame's
@@ -141,10 +163,11 @@ Uint8List readLl2Stream(FrameRef cur, FrameRef? next, int w, int h) {
 
 /// Decodes one frame's LL2 preview off the UI isolate.
 Future<Ll2Image> decodeFrameLl2(FrameRef cur, FrameRef? next, int w, int h,
-    {int? lo, int? hi}) {
+    {int? lo, int? hi, double? gr, double? gb}) {
   return Isolate.run(() {
     final buf = readLl2Stream(cur, next, w, h);
-    return decodeLl2(buf, w, h, cur.fifo0, cur.flag0, lo: lo, hi: hi);
+    return decodeLl2(buf, w, h, cur.fifo0, cur.flag0,
+        lo: lo, hi: hi, gr: gr, gb: gb);
   });
 }
 

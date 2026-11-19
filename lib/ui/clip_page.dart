@@ -1,4 +1,4 @@
-// 2026-11-17
+// 2026-11-18
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -40,6 +40,7 @@ class _ClipPageState extends State<ClipPage> with SingleTickerProviderStateMixin
   int? _pending; // latest requested frame while a decode is in flight
   bool _busy = false;
   int? _lo, _hi; // fixed levels for the whole session (no flicker while scrubbing)
+  double? _gr, _gb; // fixed white balance, same reason
   String? _error;
   final FocusNode _focus = FocusNode();
 
@@ -92,9 +93,11 @@ class _ClipPageState extends State<ClipPage> with SingleTickerProviderStateMixin
     _busy = true;
     try {
       final im = await decodeFrameLl2(cur, _index.frame(g + 1), widget.clip.width,
-          widget.clip.height, lo: _lo, hi: _hi);
+          widget.clip.height, lo: _lo, hi: _hi, gr: _gr, gb: _gb);
       _lo ??= im.lo;
       _hi ??= im.hi;
+      _gr ??= im.gr;
+      _gb ??= im.gb;
       final img = await toUiImage(im);
       if (!mounted) {
         img.dispose();

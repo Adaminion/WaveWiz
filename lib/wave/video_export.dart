@@ -1,4 +1,4 @@
-// 2026-11-17
+// 2026-11-18
 // H.264 export of marked ranges: half-res (LL1) decode in worker isolates,
 // frames piped to ffmpeg. One .mp4 per range; each camera frame becomes one
 // video frame at the chosen output rate (so playback is slow motion).
@@ -94,9 +94,11 @@ class VideoJob {
       if (out.existsSync()) {
         throw FileSystemException('File already exists', out.path);
       }
-      // Levels come from the first frame so the whole range keeps one look.
-      final first = await Isolate.run(() => _decodeBatch(item, 0, 1, null, null));
-      final lo = first.lo, hi = first.hi;
+      // Levels and white balance come from the first frame so the whole range
+      // keeps one look.
+      final first =
+          await Isolate.run(() => _decodeBatch(item, 0, 1, null, null, null, null));
+      final lo = first.lo, hi = first.hi, gr = first.gr, gb = first.gb;
 
       final proc = await Process.start(ffmpeg, [
         '-y', '-loglevel', 'error',
@@ -123,7 +125,7 @@ class VideoJob {
         final s = nextStart;
         final c = math.min(batch, item.count - s);
         nextStart += c;
-        return Isolate.run(() => _decodeBatch(item, s, c, lo, hi));
+        return Isolate.run(() => _decodeBatch(item, s, c, lo, hi, gr, gb));
       }
 
       try {
@@ -169,27 +171,32 @@ class VideoJob {
 }
 
 class _Batch {
-  _Batch(this.frames, this.lo, this.hi);
+  _Batch(this.frames, this.lo, this.hi, this.gr, this.gb);
   final List<Uint8List> frames;
   final int lo;
   final int hi;
+  final double gr;
+  final double gb;
 }
 
-_Batch _decodeBatch(VideoItem item, int start, int count, int? lo, int? hi) {
+_Batch _decodeBatch(VideoItem item, int start, int count, int? lo, int? hi,
+    double? gr, double? gb) {
   final out = <Uint8List>[];
-  var l = lo ?? 0, h = hi ?? 0;
+  var l = lo ?? 0, h = hi ?? 0, r = gr ?? 1.0, b = gb ?? 1.0;
   for (var k = start; k < start + count; k++) {
     final cur = item.refs[k];
     final next = k + 1 < item.refs.length ? item.refs[k + 1] : null;
     final im = ll1ToRgba(
       decodeLl1(readFrameStreams(cur, next), item.width, item.height),
-      lo: lo, hi: hi,
+      lo: lo, hi: hi, gr: gr, gb: gb,
     );
     if (lo == null) {
       l = im.lo;
       h = im.hi;
+      r = im.gr;
+      b = im.gb;
     }
     out.add(im.rgba);
   }
-  return _Batch(out, l, h);
+  return _Batch(out, l, h, r, b);
 }
