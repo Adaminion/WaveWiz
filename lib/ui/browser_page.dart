@@ -1,4 +1,4 @@
-// 2026-11-17
+// 2026-11-18
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
@@ -22,6 +22,33 @@ class _BrowserPageState extends State<BrowserPage> {
   bool _loading = false;
 
   Future<void> _open() async {
+    // Marks are kept on disk, but this page only shows the open folder's, so
+    // warn before switching away from clips that have some.
+    var n = 0, clipsWith = 0;
+    for (final c in _clips) {
+      final m = ClipMarks.forClip(c.id, c.name).mergedCount;
+      n += m;
+      if (m > 0) clipsWith++;
+    }
+    if (n > 0) {
+      final go = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Open another folder?'),
+          content: Text(
+              'This folder has $n marked range${n == 1 ? '' : 's'} in $clipsWith '
+              'clip${clipsWith == 1 ? '' : 's'} that haven\'t been exported.\n\n'
+              'The marks are saved and will be back when you open this folder '
+              'again, but they won\'t be included in "Export all marked" for '
+              'the new folder.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Open another folder')),
+          ],
+        ),
+      );
+      if (go != true || !mounted) return;
+    }
     final uri = await FilePicker.pickDirectory(
       dialogTitle: 'Open Wave footage folder',
     );
