@@ -1,4 +1,4 @@
-// 2026-11-18
+// 2026-11-19
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -127,14 +127,9 @@ class _ClipPageState extends State<ClipPage> with SingleTickerProviderStateMixin
 
   void _markOut() {
     _focus.requestFocus();
-    final i = _marks.pendingIn;
-    if (i == null) {
-      _toast('Press I first to set an In point.');
-    } else if (_frame < i) {
-      _toast('Out point is before the In point.');
-    } else {
-      _marks.addRange(FrameRange(i, _frame));
-    }
+    // No In point yet: start from the first frame. Out before In: swap them.
+    final i = _marks.pendingIn ?? 0;
+    _marks.addRange(FrameRange(math.min(i, _frame), math.max(i, _frame)));
   }
 
   // --- playback ------------------------------------------------------------
@@ -185,10 +180,6 @@ class _ClipPageState extends State<ClipPage> with SingleTickerProviderStateMixin
     final r = _ladder[_level];
     return '${_dir > 0 ? '▶' : '◀'} ${r.round()} fps  ·  ${(r / widget.clip.fps).toStringAsFixed(2)}× real time';
   }
-
-  void _toast(String m) => ScaffoldMessenger.of(context)
-    ..clearSnackBars()
-    ..showSnackBar(SnackBar(content: Text(m), duration: const Duration(seconds: 2)));
 
   KeyEventResult _onKey(FocusNode _, KeyEvent e) {
     if (e is! KeyDownEvent && e is! KeyRepeatEvent) return KeyEventResult.ignored;
@@ -302,6 +293,7 @@ class _ClipPageState extends State<ClipPage> with SingleTickerProviderStateMixin
                     ranges: _marks.ranges,
                     pendingIn: _marks.pendingIn,
                     onSeek: _show,
+                    onRangeChanged: _marks.setRange,
                   ),
                   const SizedBox(height: 4),
                   Wrap(
@@ -332,6 +324,9 @@ class _ClipPageState extends State<ClipPage> with SingleTickerProviderStateMixin
                         Chip(label: Text('In ${_marks.pendingIn! + 1} → press O')),
                       for (var i = 0; i < _marks.ranges.length; i++)
                         InputChip(
+                          side: BorderSide(color: rangeColor(i)),
+                          labelStyle: TextStyle(color: rangeColor(i), fontWeight: FontWeight.bold),
+                          deleteIconColor: rangeColor(i),
                           label: Text('${i + 1}: ${_marks.ranges[i].start + 1} → '
                               '${_marks.ranges[i].end + 1}  '
                               '(${_marks.ranges[i].length} f, ${_t(_marks.ranges[i].length)})'),
@@ -342,7 +337,7 @@ class _ClipPageState extends State<ClipPage> with SingleTickerProviderStateMixin
                           onDeleted: () => _marks.removeAt(i),
                         ),
                       if (_marks.ranges.isEmpty && _marks.pendingIn == null)
-                        Text('I = In, O = Out (as many ranges as you like). Space play/stop, '
+                        Text('I = In, O = Out (as many ranges as you like; drag a range edge on the bar to trim it). Space play/stop, '
                             'L/J play forward/back (press again for faster), K stop. '
                             '←/→ step 1, Shift 10, Page 100, ⌘/Ctrl 1000.',
                             style: Theme.of(context).textTheme.bodySmall),

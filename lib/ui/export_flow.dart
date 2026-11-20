@@ -1,4 +1,4 @@
-// 2026-11-17
+// 2026-11-19
 import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
@@ -68,8 +68,9 @@ Future<void> runExportFlow(BuildContext context, List<ClipInfo> clips) async {
       index: i,
       count: p.ranges.length);
 
+  String? ffmpeg;
   if (choice.video) {
-    final ffmpeg = findFfmpeg();
+    ffmpeg = findFfmpeg();
     if (ffmpeg == null) {
       await showDialog<void>(
         context: context,
@@ -84,6 +85,25 @@ Future<void> runExportFlow(BuildContext context, List<ClipInfo> clips) async {
       );
       return;
     }
+  }
+
+  if (choice.camera) {
+    final items = <OffloadItem>[];
+    for (final p in pending) {
+      for (var i = 0; i < p.ranges.length; i++) {
+        items.add(OffloadItem(
+          name: nameFor(p, i),
+          kwiPath: p.clip.kwiPath,
+          chunkLimit: p.clip.chunkLimit,
+          runs: p.ranges[i],
+        ));
+      }
+    }
+    await showExportDialog(context, OffloadPlan(items), dest);
+    if (!context.mounted) return;
+  }
+
+  if (choice.video && ffmpeg != null) {
     final vitems = <VideoItem>[];
     for (final p in pending) {
       final idx = indexes[p.clip.id]!;
@@ -101,25 +121,11 @@ Future<void> runExportFlow(BuildContext context, List<ClipInfo> clips) async {
     }
     if (!context.mounted) return;
     await showVideoDialog(context, VideoPlan(vitems, choice.fps), dest, ffmpeg);
-    return;
   }
-
-  final items = <OffloadItem>[];
-  for (final p in pending) {
-    for (var i = 0; i < p.ranges.length; i++) {
-      items.add(OffloadItem(
-        name: nameFor(p, i),
-        kwiPath: p.clip.kwiPath,
-        chunkLimit: p.clip.chunkLimit,
-        runs: p.ranges[i],
-      ));
-    }
-  }
-  await showExportDialog(context, OffloadPlan(items), dest);
 }
 
 typedef _Pending = ({ClipInfo clip, List<FrameRange> frames, List<List<RunData>> ranges});
-typedef _Choice = ({String prefix, DateTime when, bool video, int fps});
+typedef _Choice = ({String prefix, DateTime when, bool camera, bool video, int fps});
 
 class _IndexWait extends StatefulWidget {
   const _IndexWait({required this.clips, required this.indexes});
@@ -188,7 +194,8 @@ class _ConfirmDialog extends StatefulWidget {
 class _ConfirmDialogState extends State<_ConfirmDialog> {
   final TextEditingController _prefix = TextEditingController(text: AppStore.prefix);
   final DateTime _when = DateTime.now();
-  bool _video = false;
+  bool _camera = true;
+  bool _video = findFfmpeg() != null;
   int _fps = 24;
 
   @override
@@ -199,7 +206,7 @@ class _ConfirmDialogState extends State<_ConfirmDialog> {
 
   @override
   Widget build(BuildContext context) {
-    var bytes = 0, frames = 0, folders = 0;
+    var bytes = 0, frames = 0, vframes = 0, folders = 0;
     final lines = <String>[];
     for (final p in widget.pending) {
       var b = 0, f = 0;
@@ -212,15 +219,18 @@ class _ConfirmDialogState extends State<_ConfirmDialog> {
       final n = p.ranges.length;
       folders += n;
       final head = '${p.clip.name} · ${p.clip.fps.round()} fps · $n range${n == 1 ? '' : 's'}';
-      if (_video) {
-        final vf = p.frames.fold(0, (a, r) => a + r.length);
-        frames += vf;
-        lines.add('$head · $vf frames → ${p.clip.width ~/ 4}×${p.clip.height ~/ 4}');
-      } else {
+      final vf = p.frames.fold(0, (a, r) => a + r.length);
+      final parts = <String>[head];
+      if (_camera) {
         bytes += b;
         frames += f;
-        lines.add('$head · $f frames · ${fmtBytes(b)}');
+        parts.add('$f frames · ${fmtBytes(b)}');
       }
+      if (_video) {
+        vframes += vf;
+        parts.add('video $vf frames → ${p.clip.width ~/ 4}×${p.clip.height ~/ 4}');
+      }
+      lines.add(parts.join(' · '));
     }
     final first = widget.pending.first;
     final example = outputName(
@@ -231,23 +241,25 @@ class _ConfirmDialogState extends State<_ConfirmDialog> {
         index: 0,
         count: first.ranges.length);
     return AlertDialog(
-      title: Text(_video
-          ? 'Export $folders video${folders == 1 ? '' : 's'}?'
-          : 'Export $folders clip folder${folders == 1 ? '' : 's'}?'),
+      title: Text('Export $folders range${folders == 1 ? '' : 's'}?'),
       content: SizedBox(
         width: 520,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(value: false, label: Text('Camera files')),
-                ButtonSegment(value: true, label: Text('H.264 video')),
-              ],
-              selected: {_video},
-              onSelectionChanged: (v) => setState(() => _video = v.first),
-            ),
+            Wrap(spacing: 8, children: [
+              FilterChip(
+                label: const Text('Camera files'),
+                selected: _camera,
+                onSelected: (v) => setState(() => _camera = v),
+              ),
+              FilterChip(
+                label: const Text('H.264 video'),
+                selected: _video,
+                onSelected: (v) => setState(() => _video = v),
+              ),
+            ]),
             const SizedBox(height: 12),
             if (_video) ...[
               Row(children: [
@@ -268,9 +280,11 @@ class _ConfirmDialogState extends State<_ConfirmDialog> {
             for (final l in lines) Text(l),
             const SizedBox(height: 4),
             Text(
-                _video
-                    ? 'Total: $frames frames, ${(frames / _fps).toStringAsFixed(1)} s at $_fps fps'
-                    : 'Total: $frames frames, ${fmtBytes(bytes)}',
+                [
+                  if (_camera) 'Camera files: $frames frames, ${fmtBytes(bytes)}',
+                  if (_video)
+                    'Video: $vframes frames, ${(vframes / _fps).toStringAsFixed(1)} s at $_fps fps',
+                ].join('   ·   '),
                 style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 12),
             Text('Into: ${widget.dest}'),
@@ -281,20 +295,20 @@ class _ConfirmDialogState extends State<_ConfirmDialog> {
               onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 8),
-            Text(_video
-                ? 'File names: prefix-date-time-fps-clip-number.mp4\n'
-                    'e.g. $example.mp4\n'
-                    'Half-res (quarter width), decoded from the camera files.'
-                : 'Folder names: prefix-date-time-fps-clip-number\n'
-                    'e.g. $example'),
+            Text('Names: prefix-date-time-fps-clip-number\n'
+                'e.g. $example${_video ? '.mp4' : ''}'
+                '${_camera && _video ? '  (and a folder of the same name)' : ''}'
+                '${_video ? '\nVideo is half-res (quarter width), decoded from the camera files.' : ''}'),
           ],
         ),
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
         FilledButton(
-          onPressed: () => Navigator.pop(context,
-              (prefix: _prefix.text, when: _when, video: _video, fps: _fps)),
+          onPressed: !_camera && !_video
+              ? null
+              : () => Navigator.pop(context,
+                  (prefix: _prefix.text, when: _when, camera: _camera, video: _video, fps: _fps)),
           child: const Text('Export'),
         ),
       ],

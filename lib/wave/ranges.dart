@@ -1,4 +1,4 @@
-// 2026-11-17
+// 2026-11-19
 import 'package:flutter/foundation.dart';
 
 import '../app_store.dart';
@@ -54,6 +54,11 @@ class ClipMarks extends ChangeNotifier {
   void addRange(FrameRange r) {
     _ranges.add(r);
     _pendingIn = null;
+    _changed();
+  }
+
+  void setRange(int i, FrameRange r) {
+    _ranges[i] = r;
     _changed();
   }
 
