@@ -120,6 +120,7 @@ Future<void> runExportFlow(BuildContext context, List<ClipInfo> clips) async {
           height: p.clip.height,
           refs: [for (var g = r.start; g <= math.min(r.end + 1, last); g++) idx.frame(g)!],
           count: r.length,
+          matrix: p.clip.colorMatrix,
         ));
       }
     }

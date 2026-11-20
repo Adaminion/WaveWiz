@@ -1,4 +1,4 @@
-// 2026-11-18
+// 2026-11-19
 // LL2 (1/8-scale) preview decoding. LL2 is raw packed 10-bit data, LSB-first,
 // 4 colour fields per pixel. See docs/HANDOFF.md and the pixel mapping in
 // WAVE-Vivado hdmi_dark_frame.c (bitOffsetInLL2).
@@ -10,15 +10,13 @@ import 'dart:typed_data';
 import 'kwv_index.dart';
 
 class Ll2Image {
-  Ll2Image(this.rgba, this.width, this.height, this.lo, this.hi,
-      [this.gr = 1.0, this.gb = 1.0]);
+  Ll2Image(this.rgba, this.width, this.height, this.black);
   final Uint8List rgba;
   final int width;
   final int height;
-  final int lo; // black level used, in doubled 10-bit units (0..2046)
-  final int hi; // white level used, same units
-  final double gr; // white-balance gain applied to red (green = 1)
-  final double gb; // white-balance gain applied to blue
+
+  /// Black level used per colour (R, G, B), in doubled 10-bit units (0..2046).
+  final List<double> black;
 }
 
 /// Pixel offset (in 10-bit units) within an LL2 row for pixel [x], colour [c].
@@ -43,10 +41,9 @@ int ll2BytesNeeded(int w, int h, int fifo0, int flag0) {
 }
 
 /// Decodes LL2 from [buf] (stream bytes starting at the frame's cs0 slice).
-/// If [lo]/[hi] are null they are derived from the image (0.5% / 99.5%).
-/// Colour is a neutral preview: R, (G1+G2)/2, B, gamma 2.2.
+/// [matrix] is the clip's colour matrix; [black] see [rgbaFromDoubled].
 Ll2Image decodeLl2(Uint8List buf, int w, int h, int fifo0, int flag0,
-    {int? lo, int? hi, double? gr, double? gb}) {
+    {required List<double> matrix, List<double>? black}) {
   final wl = w >> 3, hl = h >> 3;
   final n = wl * hl;
   final start = fifo0 + flag0 * 64 + 10 * ll2PxDiscard(wl);
@@ -75,65 +72,68 @@ Ll2Image decodeLl2(Uint8List buf, int w, int h, int fifo0, int flag0,
       px[o + 2] = b;
     }
   }
-  return rgbaFromDoubled(px, wl, hl, lo: lo, hi: hi, gr: gr, gb: gb);
+  return rgbaFromDoubled(px, wl, hl, matrix: matrix, black: black);
 }
 
-/// Preview colour from [px] (r*2, g1+g2, b*2 per pixel, 0..2046): automatic
-/// grey-world white balance (red/blue gains so their means match green)
-/// unless [gr]/[gb] are given, levels from the histogram unless [lo]/[hi] are
-/// given, then gamma 2.2.
+/// Exposure applied before the display curve (matched against Wave Player).
+const double kLookExposure = 0.85;
+
+/// Display curve of the camera's own HDMI preview (G18M3, hdmi_lut1d.c):
+/// gamma 1.8 with a short linear toe. Index = linear 0..1 in 8192 steps.
+final Uint8List _displayCurve = () {
+  final t = Uint8List(8192);
+  for (var i = 0; i < t.length; i++) {
+    final x = i / (t.length - 1);
+    final y = x < 0.025746 ? 3.0 * x : 1.061793 * math.pow(x, 1 / 1.8) - 0.061793;
+    t[i] = (y.clamp(0.0, 1.0) * 255).round();
+  }
+  return t;
+}();
+
+/// Colour preview from [px] (r*2, g1+g2, b*2 per pixel, 0..2046): subtract the
+/// black level, apply the clip's 3x3 colour matrix (from the .kwi header, as
+/// the camera does), then the display curve. [black] is derived from the
+/// image (0.1% level of each colour) when null; pass the first frame's value
+/// to keep a whole clip consistent.
 Ll2Image rgbaFromDoubled(Uint16List px, int wl, int hl,
-    {int? lo, int? hi, double? gr, double? gb}) {
+    {required List<double> matrix, List<double>? black}) {
   final n = wl * hl;
-  if (gr == null || gb == null) {
-    var sr = 0, sg = 0, sb = 0;
-    for (var i = 0; i < n; i++) {
-      sr += px[i * 3];
-      sg += px[i * 3 + 1];
-      sb += px[i * 3 + 2];
+  var bl = black;
+  if (bl == null) {
+    bl = List<double>.filled(3, 0);
+    final target = (n * 0.001).ceil();
+    for (var c = 0; c < 3; c++) {
+      final hist = Uint32List(2047);
+      for (var i = 0; i < n; i++) {
+        hist[px[i * 3 + c]]++;
+      }
+      var acc = 0, p = 0;
+      for (; p < 2046; p++) {
+        acc += hist[p];
+        if (acc >= target) break;
+      }
+      bl[c] = p.toDouble();
     }
-    gr = sr == 0 ? 1.0 : (sg / sr).clamp(0.25, 4.0);
-    gb = sb == 0 ? 1.0 : (sg / sb).clamp(0.25, 4.0);
   }
-  if (gr != 1.0 || gb != 1.0) {
-    for (var i = 0; i < n; i++) {
-      px[i * 3] = math.min(2046, (px[i * 3] * gr).round());
-      px[i * 3 + 2] = math.min(2046, (px[i * 3 + 2] * gb).round());
-    }
-  }
-  var l = lo, hh = hi;
-  if (l == null || hh == null) {
-    final hist = Uint32List(2047);
-    for (var i = 0; i < n * 3; i++) {
-      hist[px[i]]++;
-    }
-    var mn = 0;
-    while (mn < 2046 && hist[mn] == 0) {
-      mn++;
-    }
-    final target = (px.length * 0.995).ceil();
-    var acc = 0, p = 0;
-    for (; p < 2047; p++) {
-      acc += hist[p];
-      if (acc >= target) break;
-    }
-    l = mn;
-    hh = math.max(p, mn + 1);
-  }
-  final lut = Uint8List(2047);
-  final span = (hh - l).toDouble();
-  for (var i = 0; i < 2047; i++) {
-    final t = ((i - l) / span).clamp(0.0, 1.0);
-    lut[i] = (math.pow(t, 1 / 2.2) * 255).round();
-  }
+  // Fold normalisation and exposure into the matrix.
+  final s = [for (var c = 0; c < 3; c++) kLookExposure / (2046 - bl[c])];
+  final m = [for (var i = 0; i < 9; i++) matrix[i] * s[i % 3]];
   final rgba = Uint8List(n * 4);
+  const top = 8191;
   for (var i = 0; i < n; i++) {
-    rgba[i * 4] = lut[px[i * 3]];
-    rgba[i * 4 + 1] = lut[px[i * 3 + 1]];
-    rgba[i * 4 + 2] = lut[px[i * 3 + 2]];
+    var r = px[i * 3] - bl[0], g = px[i * 3 + 1] - bl[1], b = px[i * 3 + 2] - bl[2];
+    if (r < 0) r = 0;
+    if (g < 0) g = 0;
+    if (b < 0) b = 0;
+    final ro = (m[0] * r + m[1] * g + m[2] * b) * top;
+    final go = (m[3] * r + m[4] * g + m[5] * b) * top;
+    final bo = (m[6] * r + m[7] * g + m[8] * b) * top;
+    rgba[i * 4] = _displayCurve[ro < 0 ? 0 : (ro > top ? top : ro.toInt())];
+    rgba[i * 4 + 1] = _displayCurve[go < 0 ? 0 : (go > top ? top : go.toInt())];
+    rgba[i * 4 + 2] = _displayCurve[bo < 0 ? 0 : (bo > top ? top : bo.toInt())];
     rgba[i * 4 + 3] = 255;
   }
-  return Ll2Image(rgba, wl, hl, l, hh, gr, gb);
+  return Ll2Image(rgba, wl, hl, bl);
 }
 
 /// Reads the stream bytes for frame [cur] (continuing into [next] if the frame's
@@ -163,16 +163,16 @@ Uint8List readLl2Stream(FrameRef cur, FrameRef? next, int w, int h) {
 
 /// Decodes one frame's LL2 preview off the UI isolate.
 Future<Ll2Image> decodeFrameLl2(FrameRef cur, FrameRef? next, int w, int h,
-    {int? lo, int? hi, double? gr, double? gb}) {
+    {required List<double> matrix, List<double>? black}) {
   return Isolate.run(() {
     final buf = readLl2Stream(cur, next, w, h);
     return decodeLl2(buf, w, h, cur.fifo0, cur.flag0,
-        lo: lo, hi: hi, gr: gr, gb: gb);
+        matrix: matrix, black: black);
   });
 }
 
 /// Thumbnail for a clip: a frame near the start of the first chunk.
-Future<Ll2Image> decodeThumbnail(String firstChunk, int w, int h) {
+Future<Ll2Image> decodeThumbnail(String firstChunk, int w, int h, List<double> matrix) {
   return Isolate.run(() {
     final idx = scanChunk(firstChunk, maxFrames: 12);
     if (idx.length == 0) throw const FormatException('no frames');
@@ -182,6 +182,6 @@ Future<Ll2Image> decodeThumbnail(String firstChunk, int w, int h) {
     final cur = ref(k);
     final next = k + 1 < idx.length ? ref(k + 1) : null;
     final buf = readLl2Stream(cur, next, w, h);
-    return decodeLl2(buf, w, h, cur.fifo0, cur.flag0);
+    return decodeLl2(buf, w, h, cur.fifo0, cur.flag0, matrix: matrix);
   });
 }

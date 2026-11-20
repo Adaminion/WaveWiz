@@ -1,4 +1,4 @@
-// 2026-11-17
+// 2026-11-19
 import 'dart:async';
 import 'dart:ui' as ui;
 
@@ -21,15 +21,15 @@ class ThumbnailService {
   final List<void Function()> _queue = [];
   static const int _maxParallel = 2;
 
-  Future<ui.Image?> thumbnail(String firstChunk, int w, int h) =>
-      _cache.putIfAbsent(firstChunk, () => _run(firstChunk, w, h));
+  Future<ui.Image?> thumbnail(String firstChunk, int w, int h, List<double> matrix) =>
+      _cache.putIfAbsent(firstChunk, () => _run(firstChunk, w, h, matrix));
 
-  Future<ui.Image?> _run(String chunk, int w, int h) {
+  Future<ui.Image?> _run(String chunk, int w, int h, List<double> matrix) {
     final c = Completer<ui.Image?>();
     void go() async {
       _running++;
       try {
-        c.complete(await toUiImage(await decodeThumbnail(chunk, w, h)));
+        c.complete(await toUiImage(await decodeThumbnail(chunk, w, h, matrix)));
       } catch (_) {
         c.complete(null); // unreadable clip: show a placeholder, never crash
       } finally {

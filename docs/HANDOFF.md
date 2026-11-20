@@ -1,4 +1,4 @@
-<!-- 2026-11-17 -->
+<!-- 2026-11-19 -->
 # Wave Browser — project handoff
 
 ## Goal
@@ -66,7 +66,7 @@ Codestream map (from hdmi.c): cs0 = LL2, cs1 = LH2, cs2 = HL2, cs3 = HH2. cs4..c
   - Reconstruction: vertical inverse on columns (LL2 + LH2 and HL2 + HH2), then horizontal inverse (L + H). Lifting: D' = D - ((S[n-1] - S[n+1] + 2) >> 2); Xeven = S - (D' >> 1); Xodd = Xeven + D'. Frame edges are clamped. Colour fields: R, G1, G2, B; neutral preview = R, (G1+G2)/2, B with gamma 2.2.
   - `lib/wave/video_export.dart` pipes LL1 frames into ffmpeg (H.264 mp4, one video per marked range).
 - **Full-res**: needs the stage-1 streams; the decode has to be derived from the Encoder_1.0 + Wavelet_S1 Verilog. The vertical wavelet borrows rows from the previous frame (boundary rollover).
-- Colour: apply the clip's colour matrix and the dark frame later. The owner grades elsewhere, so a neutral output is fine.
+- Colour (working, `rgbaFromDoubled` in `lib/wave/ll2.dart`): black level per colour from the first frame (0.1% level, no dark frame yet), then the clip's own 3x3 matrix from the .kwi header (m5600K at 0x24, m3200K at 0x48, 9 floats each: RtoR, GtoR, BtoR, RtoG, ... blended by colorTemp as in `hdmi_lut1d.c`), exposure x0.85, then the camera's G18M3 display curve (gamma 1.8 with linear toe). Checked against a Wave Player export of the same frames (mean abs error about 10/255, matching mean colours). The dark frame is still not applied, so deep shadows can drift slightly red.
 
 ## Suggested app architecture
 - Flutter UI. Native decoding (Rust or C via FFI, or Dart isolates for the LL2 preview since it's just bit unpacking). GPU shader later for full-res playback.

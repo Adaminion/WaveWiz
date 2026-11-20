@@ -1,4 +1,4 @@
-// 2026-11-18
+// 2026-11-19
 // H.264 export of marked ranges: half-res (LL1) decode in worker isolates,
 // frames piped to ffmpeg. One .mp4 per range; each camera frame becomes one
 // video frame at the chosen output rate (so playback is slow motion).
@@ -40,12 +40,14 @@ class VideoItem {
     required this.height,
     required this.refs,
     required this.count,
+    required this.matrix,
   });
   final String name; // output file name without extension
   final int width; // clip (sensor) size; the video is a quarter of it
   final int height;
   final List<FrameRef> refs;
   final int count;
+  final List<double> matrix; // clip colour matrix (3x3, row-major)
 
   int get videoWidth => width ~/ 4;
   int get videoHeight => height ~/ 4;
@@ -94,11 +96,10 @@ class VideoJob {
       if (out.existsSync()) {
         throw FileSystemException('File already exists', out.path);
       }
-      // Levels and white balance come from the first frame so the whole range
-      // keeps one look.
-      final first =
-          await Isolate.run(() => _decodeBatch(item, 0, 1, null, null, null, null));
-      final lo = first.lo, hi = first.hi, gr = first.gr, gb = first.gb;
+      // The black level comes from the first frame so the whole range keeps
+      // one look.
+      final first = await Isolate.run(() => _decodeBatch(item, 0, 1, null));
+      final black = first.black;
 
       final proc = await Process.start(ffmpeg, [
         '-y', '-loglevel', 'error',
@@ -125,7 +126,7 @@ class VideoJob {
         final s = nextStart;
         final c = math.min(batch, item.count - s);
         nextStart += c;
-        return Isolate.run(() => _decodeBatch(item, s, c, lo, hi, gr, gb));
+        return Isolate.run(() => _decodeBatch(item, s, c, black));
       }
 
       try {
@@ -171,32 +172,24 @@ class VideoJob {
 }
 
 class _Batch {
-  _Batch(this.frames, this.lo, this.hi, this.gr, this.gb);
+  _Batch(this.frames, this.black);
   final List<Uint8List> frames;
-  final int lo;
-  final int hi;
-  final double gr;
-  final double gb;
+  final List<double> black;
 }
 
-_Batch _decodeBatch(VideoItem item, int start, int count, int? lo, int? hi,
-    double? gr, double? gb) {
+_Batch _decodeBatch(VideoItem item, int start, int count, List<double>? black) {
   final out = <Uint8List>[];
-  var l = lo ?? 0, h = hi ?? 0, r = gr ?? 1.0, b = gb ?? 1.0;
+  var bl = black ?? const <double>[0, 0, 0];
   for (var k = start; k < start + count; k++) {
     final cur = item.refs[k];
     final next = k + 1 < item.refs.length ? item.refs[k + 1] : null;
     final im = ll1ToRgba(
       decodeLl1(readFrameStreams(cur, next), item.width, item.height),
-      lo: lo, hi: hi, gr: gr, gb: gb,
+      matrix: item.matrix,
+      black: black,
     );
-    if (lo == null) {
-      l = im.lo;
-      h = im.hi;
-      r = im.gr;
-      b = im.gb;
-    }
+    if (black == null) bl = im.black;
     out.add(im.rgba);
   }
-  return _Batch(out, l, h, r, b);
+  return _Batch(out, bl);
 }

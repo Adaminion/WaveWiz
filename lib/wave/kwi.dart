@@ -1,4 +1,4 @@
-// 2026-11-17
+// 2026-11-19
 // Clip header (.kwi) parsing. Layout follows ClipHeader_s in docs/frame.h.
 import 'dart:io';
 import 'dart:typed_data';
@@ -31,6 +31,7 @@ class ClipInfo {
     required this.fps,
     required this.shutterAngle,
     required this.colorTemp,
+    required this.colorMatrix,
     required this.chunkPaths,
     required this.totalBytes,
     required this.chunkLimit,
@@ -45,6 +46,10 @@ class ClipInfo {
   final double fps;
   final double shutterAngle;
   final double colorTemp;
+
+  /// Camera colour matrix for this clip (3x3 row-major: R', G', B' from R, G, B),
+  /// interpolated between the 3200 K and 5600 K matrices of the header.
+  final List<double> colorMatrix;
   final List<String> chunkPaths;
   final int totalBytes;
 
@@ -57,8 +62,8 @@ class ClipInfo {
   final String id;
 
   /// Parses a ClipHeader_s (first 512 bytes of a .kwi). Returns null if invalid.
-  static ({int w, int h, double fps, double shutter, double temp})? parseHeader(
-      Uint8List b) {
+  static ({int w, int h, double fps, double shutter, double temp, List<double> matrix})?
+      parseHeader(Uint8List b) {
     if (b.length < 0x20 || !hasDelimiter(b)) return null;
     final d = ByteData.sublistView(b);
     final w = d.getUint16(0x10, Endian.little);
@@ -70,7 +75,27 @@ class ClipInfo {
       fps: d.getFloat32(0x14, Endian.little),
       shutter: d.getFloat32(0x18, Endian.little),
       temp: d.getFloat32(0x1C, Endian.little),
+      matrix: _matrixFrom(d, d.getFloat32(0x1C, Endian.little)),
     );
+  }
+
+  /// Firmware default (5600 K), used if a header carries no usable matrices.
+  static const List<double> defaultMatrix = [
+    1.79766, -0.378569, -0.134178,
+    -0.261755, 1.25, -0.134178,
+    -0.148242, -0.721982, 1.92007,
+  ];
+
+  // m5600K at 0x24, m3200K at 0x48: nine floats each (RtoR, GtoR, BtoR, RtoG,
+  // GtoG, BtoG, RtoB, GtoB, BtoB). Blend by colour temperature as the camera does.
+  static List<double> _matrixFrom(ByteData d, double temp) {
+    if (d.lengthInBytes < 0x6C) return defaultMatrix;
+    final m56 = [for (var i = 0; i < 9; i++) d.getFloat32(0x24 + 4 * i, Endian.little)];
+    final m32 = [for (var i = 0; i < 9; i++) d.getFloat32(0x48 + 4 * i, Endian.little)];
+    final x = temp.isFinite ? ((temp - 3200) / 2400).clamp(0.0, 1.0) : 1.0;
+    final m = [for (var i = 0; i < 9; i++) (1 - x) * m32[i] + x * m56[i]];
+    final ok = m.every((v) => v.isFinite && v.abs() < 10) && m.any((v) => v != 0);
+    return ok ? m : defaultMatrix;
   }
 
   /// Loads clip info from a directory containing a .kwi and f*.kwv chunks.
@@ -113,6 +138,7 @@ class ClipInfo {
         fps: h.fps,
         shutterAngle: h.shutter,
         colorTemp: h.temp,
+        colorMatrix: h.matrix,
         chunkPaths: chunks,
         totalBytes: total,
         chunkLimit: biggest,

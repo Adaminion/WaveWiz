@@ -1,4 +1,4 @@
-// 2026-11-17
+// 2026-11-19
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -45,9 +45,9 @@ void main() {
     final cur = FrameRef(c.chunkPaths.first, idx.offsets[5], idx.size0[5], idx.fifo0[5], idx.flag0[5]);
     final nx = FrameRef(c.chunkPaths.first, idx.offsets[6], idx.size0[6], idx.fifo0[6], idx.flag0[6]);
     final buf = readLl2Stream(cur, nx, c.width, c.height);
-    final im = decodeLl2(buf, c.width, c.height, cur.fifo0, cur.flag0);
+    final im = decodeLl2(buf, c.width, c.height, cur.fifo0, cur.flag0,
+        matrix: c.colorMatrix);
     expect([im.width, im.height], [256, 128]);
-    expect(im.hi, greaterThan(im.lo));
     // A real scene is not flat: expect a wide spread of brightness values.
     final vals = <int>{for (var i = 0; i < im.rgba.length; i += 4) im.rgba[i + 1]};
     expect(vals.length, greaterThan(100));

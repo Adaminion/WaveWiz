@@ -202,6 +202,7 @@ class _ClipCard extends StatelessWidget {
                         clip.chunkPaths.first,
                         clip.width,
                         clip.height,
+                        clip.colorMatrix,
                       ),
                       builder: (_, s) {
                         if (s.connectionState != ConnectionState.done) {

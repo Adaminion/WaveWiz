@@ -1,4 +1,4 @@
-// 2026-11-17
+// 2026-11-19
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -47,6 +47,7 @@ void main() {
       height: c.height,
       refs: [for (var i = 10; i <= 30; i++) _ref(c, idx, i)],
       count: 20,
+      matrix: c.colorMatrix,
     );
     final dest = Directory.systemTemp.createTempSync('wavewiz_vid');
     try {

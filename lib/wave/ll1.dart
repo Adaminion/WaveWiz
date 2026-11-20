@@ -1,4 +1,4 @@
-// 2026-11-18
+// 2026-11-19
 // Half-res (LL1) decoding: LL2 (raw) + LH2/HL2/HH2 (variable-length coded,
 // quantised) -> inverse 2/6 wavelet (vertical, then horizontal) -> LL1 colour
 // fields. LL1 is w/4 x h/4 per colour field (512x256 for a 2048x1024 clip).
@@ -252,8 +252,9 @@ Ll1Fields decodeLl1(FrameStreams fs, int w, int h) {
   return Ll1Fields(fields, w1, h1);
 }
 
-/// Preview colour for LL1 fields (R, (G1+G2)/2, B; auto white balance, gamma 2.2).
-Ll2Image ll1ToRgba(Ll1Fields f, {int? lo, int? hi, double? gr, double? gb}) {
+/// Colour preview for LL1 fields (R, (G1+G2)/2, B), see [rgbaFromDoubled].
+Ll2Image ll1ToRgba(Ll1Fields f,
+    {required List<double> matrix, List<double>? black}) {
   final n = f.width * f.height;
   final px = Uint16List(n * 3);
   int cl(int v) => v < 0 ? 0 : (v > 2046 ? 2046 : v);
@@ -262,15 +263,14 @@ Ll2Image ll1ToRgba(Ll1Fields f, {int? lo, int? hi, double? gr, double? gb}) {
     px[i * 3 + 1] = cl(f.fields[1][i] + f.fields[2][i]);
     px[i * 3 + 2] = cl(f.fields[3][i] * 2);
   }
-  return rgbaFromDoubled(px, f.width, f.height,
-      lo: lo, hi: hi, gr: gr, gb: gb);
+  return rgbaFromDoubled(px, f.width, f.height, matrix: matrix, black: black);
 }
 
 /// Decodes frame [cur] to a half-res RGBA image off the UI isolate.
 Future<Ll2Image> decodeFrameLl1(FrameRef cur, FrameRef? next, int w, int h,
-    {int? lo, int? hi}) {
+    {required List<double> matrix, List<double>? black}) {
   return Isolate.run(() {
     final fs = readFrameStreams(cur, next);
-    return ll1ToRgba(decodeLl1(fs, w, h), lo: lo, hi: hi);
+    return ll1ToRgba(decodeLl1(fs, w, h), matrix: matrix, black: black);
   });
 }
