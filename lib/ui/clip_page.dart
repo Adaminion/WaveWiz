@@ -49,6 +49,7 @@ class _ClipPageState extends State<ClipPage> with SingleTickerProviderStateMixin
     super.initState();
     _index.addListener(_onIndexed);
     _marks.addListener(_onMarks);
+    HardwareKeyboard.instance.addHandler(_onHardwareKey);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _image == null && _index.frameCount > 0) _show(0);
     });
@@ -68,6 +69,7 @@ class _ClipPageState extends State<ClipPage> with SingleTickerProviderStateMixin
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _ticker?.dispose();
     _index.removeListener(_onIndexed);
     _marks.removeListener(_onMarks);
@@ -217,6 +219,16 @@ class _ClipPageState extends State<ClipPage> with SingleTickerProviderStateMixin
       return KeyEventResult.ignored;
     }
     return KeyEventResult.handled;
+  }
+
+  // Safety net: if keyboard focus has ended up outside our Focus (for example
+  // on an app-bar button), keys would otherwise fall through and beep.
+  bool _onHardwareKey(KeyEvent e) {
+    if (!mounted || _focus.hasFocus) return false;
+    if (ModalRoute.of(context)?.isCurrent != true) return false;
+    if (_onKey(_focus, e) != KeyEventResult.handled) return false;
+    _focus.requestFocus();
+    return true;
   }
 
   // --- export --------------------------------------------------------------

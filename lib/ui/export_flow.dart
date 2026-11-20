@@ -22,9 +22,13 @@ Future<void> runExportFlow(BuildContext context, List<ClipInfo> clips) async {
   ];
   if (marked.isEmpty) return;
 
-  final uri = await FilePicker.pickDirectory(dialogTitle: 'Choose where to export the ranges');
+  final uri = await FilePicker.pickDirectory(
+    dialogTitle: 'Choose where to export the ranges',
+    initialDirectory: AppStore.lastExportFolder,
+  );
   if (uri == null || !context.mounted) return;
   final dest = uri.toFilePath();
+  AppStore.lastExportFolder = dest;
 
   final indexes = {for (final c in marked) c.id: ClipIndex.forClip(c)};
   if (indexes.values.any((i) => !i.complete)) {

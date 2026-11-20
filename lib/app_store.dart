@@ -1,4 +1,4 @@
-// 2026-11-17
+// 2026-11-19
 // Small JSON store in the app-support folder: In/Out marks per clip (so a
 // crash or quit loses nothing) and the export-name prefix. Never touches the
 // camera drive.
@@ -42,6 +42,26 @@ class AppStore {
   static String get prefix => (_data['prefix'] as String?) ?? 'wavewiz';
   static set prefix(String v) {
     _data['prefix'] = v;
+    _save();
+  }
+
+  /// Last folder footage was opened from / exported to (null if none or gone).
+  static String? get lastOpenFolder => _folder('lastOpenFolder');
+  static set lastOpenFolder(String? v) => _setFolder('lastOpenFolder', v);
+  static String? get lastExportFolder => _folder('lastExportFolder');
+  static set lastExportFolder(String? v) => _setFolder('lastExportFolder', v);
+
+  static String? _folder(String key) {
+    final v = _data[key];
+    return v is String && Directory(v).existsSync() ? v : null;
+  }
+
+  static void _setFolder(String key, String? v) {
+    if (v == null) {
+      _data.remove(key);
+    } else {
+      _data[key] = v;
+    }
     _save();
   }
 

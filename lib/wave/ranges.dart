@@ -62,6 +62,13 @@ class ClipMarks extends ChangeNotifier {
     _changed();
   }
 
+  /// Removes every range and the open in-point.
+  void clear() {
+    _ranges.clear();
+    _pendingIn = null;
+    _changed();
+  }
+
   void removeAt(int i) {
     _ranges.removeAt(i);
     _changed();

@@ -1,9 +1,10 @@
-// 2026-11-18
+// 2026-11-19
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../app_store.dart';
 import '../wave/kwi.dart';
 import '../wave/ranges.dart';
 import 'clip_page.dart';
@@ -51,9 +52,11 @@ class _BrowserPageState extends State<BrowserPage> {
     }
     final uri = await FilePicker.pickDirectory(
       dialogTitle: 'Open Wave footage folder',
+      initialDirectory: AppStore.lastOpenFolder,
     );
     if (uri == null) return;
     final path = uri.toFilePath();
+    AppStore.lastOpenFolder = path;
     setState(() {
       _folder = path;
       _loading = true;
@@ -64,6 +67,27 @@ class _BrowserPageState extends State<BrowserPage> {
       _clips = clips;
       _loading = false;
     });
+  }
+
+  Future<void> _clearMarks(int n, int clipsWith) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear all marks?'),
+        content: Text(
+            'This removes $n marked range${n == 1 ? '' : 's'} in $clipsWith '
+            'clip${clipsWith == 1 ? '' : 's'} of this folder, including any that '
+            'you haven\'t exported. Footage files are not touched.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Clear marks')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    for (final c in _clips) {
+      ClipMarks.forClip(c.id, c.name).clear();
+    }
   }
 
   @override
@@ -92,16 +116,25 @@ class _BrowserPageState extends State<BrowserPage> {
                 }
                 return Padding(
                   padding: const EdgeInsets.only(right: 8),
-                  child: FilledButton.tonalIcon(
-                    onPressed: n == 0
-                        ? null
-                        : () => runExportFlow(context, _clips),
-                    icon: const Icon(Icons.save_alt),
-                    label: Text(
-                      n == 0
-                          ? 'Export all marked'
-                          : 'Export all marked ($n from $clipsWith clip${clipsWith == 1 ? '' : 's'})',
-                    ),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        tooltip: 'Clear all marks in this folder',
+                        onPressed: n == 0 ? null : () => _clearMarks(n, clipsWith),
+                        icon: const Icon(Icons.layers_clear),
+                      ),
+                      FilledButton.tonalIcon(
+                        onPressed: n == 0
+                            ? null
+                            : () => runExportFlow(context, _clips),
+                        icon: const Icon(Icons.save_alt),
+                        label: Text(
+                          n == 0
+                              ? 'Export all marked'
+                              : 'Export all marked ($n from $clipsWith clip${clipsWith == 1 ? '' : 's'})',
+                        ),
+                      ),
+                    ],
                   ),
                 );
               },
